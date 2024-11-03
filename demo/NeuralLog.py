@@ -17,7 +17,7 @@ from tqdm import tqdm
 from data_loader import load_supercomputers
 from utils import report, EarlyStopping
 
-log_file = "../logs/BGL.log"
+log_file = "logs/BGL.log"
 embed_dim = 768  # Embedding size for each token
 max_len = 75
 class LogDataset(Dataset):
