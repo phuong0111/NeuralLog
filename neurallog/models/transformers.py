@@ -1,42 +1,53 @@
-from tensorflow import keras
-from tensorflow.keras import layers
-from .positional_encodings import PositionEmbedding
+import torch
+import torch.nn as nn
+from .positional_encodings import PositionalEncoding
 
 # embed_dim = 768  # Embedding size for each token
 # num_heads = 12  # Number of attention heads
 # ff_dim = 2048  # Hidden layer size in feed forward network inside transformer
 # max_len = 20
 
-class TransformerBlock(layers.Layer):
-    def __init__(self, embed_dim, num_heads, ff_dim, rate=0.1):
-        super(TransformerBlock, self).__init__()
-        self.att = layers.MultiHeadAttention(num_heads=num_heads, key_dim=embed_dim)
-        self.ffn = keras.Sequential(
-            [layers.Dense(ff_dim, activation="relu"), layers.Dense(embed_dim), ]
+class TransformerBlock(nn.Module):
+    def __init__(self, embed_dim, num_heads, ff_dim, dropout=0.1):
+        super().__init__()
+        self.attention = nn.MultiheadAttention(embed_dim, num_heads)
+        self.feed_forward = nn.Sequential(
+            nn.Linear(embed_dim, ff_dim),
+            nn.ReLU(),
+            nn.Linear(ff_dim, embed_dim)
         )
-        self.layernorm1 = layers.LayerNormalization(epsilon=1e-6)
-        self.layernorm2 = layers.LayerNormalization(epsilon=1e-6)
-        self.dropout1 = layers.Dropout(rate)
-        self.dropout2 = layers.Dropout(rate)
+        self.layernorm1 = nn.LayerNorm(embed_dim)
+        self.layernorm2 = nn.LayerNorm(embed_dim)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
 
-    def call(self, inputs, training):
-        attn_output = self.att(inputs, inputs)
-        attn_output = self.dropout1(attn_output, training=training)
-        out1 = self.layernorm1(inputs + attn_output)
-        ffn_output = self.ffn(out1)
-        ffn_output = self.dropout2(ffn_output, training=training)
-        return self.layernorm2(out1 + ffn_output)
+    def forward(self, x):
+        # PyTorch attention expects seq_len, batch, embed_dim
+        x_t = x.transpose(0, 1)
+        attn_output, _ = self.attention(x_t, x_t, x_t)
+        attn_output = attn_output.transpose(0, 1)
+        out1 = self.layernorm1(x + self.dropout1(attn_output))
+        ff_output = self.feed_forward(out1)
+        return self.layernorm2(out1 + self.dropout2(ff_output))
 
-def transformer_classifer(embed_dim, ff_dim, max_len, num_heads, dropout=0.1):
-    inputs = layers.Input(shape=(max_len, embed_dim))
-    transformer_block = TransformerBlock(embed_dim, num_heads, ff_dim)
-    embedding_layer = PositionEmbedding(1024, embed_dim)
-    x = embedding_layer(inputs)
-    x = transformer_block(x)
-    x = layers.GlobalAveragePooling1D()(x)
-    x = layers.Dropout(dropout)(x)
-    x = layers.Dense(32, activation="relu")(x)
-    x = layers.Dropout(dropout)(x)
-    outputs = layers.Dense(2, activation="softmax")(x)
-    model = keras.Model(inputs=inputs, outputs=outputs)
-    return model
+class TransformerClassifier(nn.Module):
+    def __init__(self, embed_dim, ff_dim, max_len, num_heads, dropout=0.1):
+        super().__init__()
+        self.positional_encoding = PositionalEncoding(max_len, embed_dim)
+        self.transformer = TransformerBlock(embed_dim, num_heads, ff_dim, dropout)
+        self.global_pool = nn.AdaptiveAvgPool1d(1)
+        self.fc1 = nn.Linear(embed_dim, 32)
+        self.fc2 = nn.Linear(32, 2)
+        self.dropout = nn.Dropout(dropout)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.positional_encoding(x)
+        x = self.transformer(x)
+        # Global pooling
+        x = x.transpose(1, 2)
+        x = self.global_pool(x).squeeze(-1)
+        x = self.dropout(x)
+        x = self.relu(self.fc1(x))
+        x = self.dropout(x)
+        return torch.softmax(self.fc2(x), dim=-1)
